@@ -1,3 +1,2 @@
-// Re-exports useWalletContext for backward compatibility.
-// Prefer importing useWalletContext directly from context/WalletContext.
+// Re-export the wallet context hook for compatibility with existing imports.
 export { useWalletContext as useWallet } from '../context/WalletContext'
