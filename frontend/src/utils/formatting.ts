@@ -16,3 +16,8 @@ export const stroopsToXLM = (stroops: number | string): number => {
 export const xlmToStroops = (xlm: number | string): number => {
   return Math.floor(parseFloat(xlm.toString()) * 10000000)
 }
+
+export const stellarExplorerUrl = (value: string, type: 'account' | 'contract'): string => {
+  const base = 'https://stellar.expert/explorer/testnet'
+  return type === 'contract' ? `${base}/contract/${value}` : `${base}/account/${value}`
+}
