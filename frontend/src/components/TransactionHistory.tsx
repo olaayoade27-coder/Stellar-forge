@@ -1,7 +1,6 @@
+import { Button,Spinner } from './UI';
 import { useState, useEffect, useCallback } from 'react'
-import { useStellarContext } from '../context/StellarContext'
-import { Button } from './UI/Button'
-import { Spinner } from './UI/Spinner'
+import { stellarService } from '../services/stellar'
 import { STELLAR_CONFIG } from '../config/stellar'
 import type { ContractEvent, ContractEventType } from '../types'
 

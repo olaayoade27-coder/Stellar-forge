@@ -1,3 +1,4 @@
+import { Input } from './UI';
 import { useState, useEffect } from 'react'
 import { Input } from './UI/Input'
 import { Button } from './UI/Button'
