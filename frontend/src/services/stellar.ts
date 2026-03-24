@@ -10,21 +10,12 @@ const EVENT_TOPICS: ContractEventType[] = [
   'fees_updated',
 ]
 
-/** Always reads the active network from localStorage so it reflects UI switches */
 function getRpcUrl(): string {
-  try {
-    const stored = localStorage.getItem('stellarforge_network')
-    const network: 'testnet' | 'mainnet' =
-      stored === 'mainnet' || stored === 'testnet'
-        ? stored
-        : (STELLAR_CONFIG.network as 'testnet' | 'mainnet')
-    return STELLAR_CONFIG[network].sorobanRpcUrl
-  } catch {
-    return STELLAR_CONFIG[STELLAR_CONFIG.network as 'testnet' | 'mainnet'].sorobanRpcUrl
-  }
+  const network = STELLAR_CONFIG.network as 'testnet' | 'mainnet'
+  return STELLAR_CONFIG[network].sorobanRpcUrl
 }
 
-// ── Raw RPC types ─────────────────────────────────────────────────────────────
+// ── Raw RPC types ────────────────────────────────────────────────────────────
 
 interface RpcEventResponse {
   id: string
@@ -35,8 +26,8 @@ interface RpcEventResponse {
   pagingToken: string
   inSuccessfulContractCall: boolean
   txHash: string
-  topic: string[]
-  value: string
+  topic: string[]   // base64-encoded XDR ScVal[]
+  value: string     // base64-encoded XDR ScVal
 }
 
 interface RpcGetEventsResult {
@@ -44,10 +35,16 @@ interface RpcGetEventsResult {
   latestLedger: number
 }
 
-// ── XDR decode helpers ────────────────────────────────────────────────────────
+// ── XDR decode helpers (no SDK dependency) ───────────────────────────────────
 
+/**
+ * Decode a base64 XDR ScVal to a human-readable string.
+ * We use the stellar-sdk xdr module dynamically so the service still compiles
+ * even if types aren't resolved at edit time.
+ */
 async function scValB64ToString(b64: string): Promise<string> {
   try {
+    // Dynamic import keeps the bundle tree-shakeable and avoids top-level type issues
     const { xdr } = await import('stellar-sdk')
     const val = xdr.ScVal.fromXDR(b64, 'base64')
     return scValToString(val, xdr)
@@ -77,26 +74,37 @@ function scValToString(val: any, xdr: any): string {
     if (type === xdr.ScValType.scvSymbol()) return val.sym().toString()
     if (type === xdr.ScValType.scvVoid()) return 'none'
     if (type === xdr.ScValType.scvVec()) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const items: string[] = (val.vec() ?? []).map((v: any) => scValToString(v, xdr))
       return items.join(', ')
     }
-    return atob(val.toXDR('base64'))
+    return b64ToString(val.toXDR('base64'))
   } catch {
     return ''
   }
 }
 
+function b64ToString(b64: string): string {
+  try {
+    return atob(b64)
+  } catch {
+    return b64
+  }
+}
+
+// ── Event parsing ─────────────────────────────────────────────────────────────
+
 async function parseRpcEvent(raw: RpcEventResponse): Promise<ContractEvent | null> {
   try {
     if (!raw.topic?.length) return null
+
+    // topic[0] is the event name symbol
     const eventType = (await scValB64ToString(raw.topic[0])) as ContractEventType
     if (!EVENT_TOPICS.includes(eventType)) return null
 
     const { xdr } = await import('stellar-sdk')
     const valueVal = xdr.ScVal.fromXDR(raw.value, 'base64')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const items: any[] = valueVal.vec() ?? []
+
     const data: Record<string, string> = {}
 
     switch (eventType) {
@@ -139,6 +147,8 @@ async function parseRpcEvent(raw: RpcEventResponse): Promise<ContractEvent | nul
   }
 }
 
+// ── JSON-RPC helper ───────────────────────────────────────────────────────────
+
 async function rpcCall<T>(method: string, params: unknown): Promise<T> {
   const res = await fetch(getRpcUrl(), {
     method: 'POST',
@@ -169,14 +179,28 @@ export class StellarService {
     return {}
   }
 
+  /**
+   * Fetch contract events for the factory contract, newest-first.
+   * @param contractId  Soroban contract address (C...)
+   * @param limit       Max events per page (default 20)
+   * @param cursor      Opaque pagination cursor from a previous call
+   */
   async getContractEvents(
     contractId: string,
     limit = 20,
     cursor?: string,
   ): Promise<GetEventsResult> {
     const params: Record<string, unknown> = {
-      filters: [{ type: 'contract', contractIds: [contractId] }],
-      pagination: { limit, ...(cursor ? { cursor } : {}) },
+      filters: [
+        {
+          type: 'contract',
+          contractIds: [contractId],
+        },
+      ],
+      pagination: {
+        limit,
+        ...(cursor ? { cursor } : {}),
+      },
     }
 
     const result = await rpcCall<RpcGetEventsResult>('getEvents', params)
@@ -184,10 +208,12 @@ export class StellarService {
     const parsed = await Promise.all(result.events.map(parseRpcEvent))
     const events = parsed
       .filter((e): e is ContractEvent => e !== null)
-      .sort((a, b) => b.ledger - a.ledger)
+      .sort((a, b) => b.ledger - a.ledger) // newest-first
 
     const lastEvent = result.events[result.events.length - 1]
-    return { events, cursor: lastEvent?.pagingToken ?? null }
+    const nextCursor = lastEvent?.pagingToken ?? null
+
+    return { events, cursor: nextCursor }
   }
 }
 
