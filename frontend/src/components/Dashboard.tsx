@@ -1,104 +1,107 @@
-import React, { useState, useEffect, useMemo } from 'react'
-import { Input } from './UI/Input'
+import React, { useState, useMemo, useCallback } from 'react'
+import { Input } from './UI'
+import { TransactionHistory } from './TransactionHistory'
 import { useDebounce } from '../hooks/useDebounce'
-import { stellarService } from '../services/stellar'
-import type { TokenInfo } from '../types'
+import { useTokens } from '../hooks/useTokens'
+import { STELLAR_CONFIG } from '../config/stellar'
 
-type SortOption = 'newest' | 'oldest' | 'name-az'
+export const TokenDashboard: React.FC = () => {
+  const { tokens, isLoading, error } = useTokens()
 
-const SORT_LABELS: Record<SortOption, string> = {
-  newest: 'Newest First',
-  oldest: 'Oldest First',
-  'name-az': 'Name A–Z',
-}
-
-export const Dashboard: React.FC = () => {
-  const [tokens, setTokens] = useState<TokenInfo[]>([])
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [sort, setSort] = useState<SortOption>('newest')
-  const [loading, setLoading] = useState(true)
-
   const debouncedSearch = useDebounce(search, 300)
 
-  useEffect(() => {
-    stellarService.getAllTokens()
-      .then(setTokens)
-      .finally(() => setLoading(false))
+  const handleCopyAddress = useCallback(async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address)
+      setCopiedAddress(address)
+      setTimeout(() => setCopiedAddress(null), 1800)
+    } catch {
+      // clipboard not available
+    }
   }, [])
 
-  const filtered = useMemo(() => {
+  const formatCreationDate = useCallback((createdAt: number | undefined) => {
+    if (!createdAt) return 'Unknown'
+    return new Date(createdAt * 1000).toLocaleString()
+  }, [])
+
+  const filteredTokens = useMemo(() => {
+    if (!debouncedSearch.trim()) return tokens
     const query = debouncedSearch.toLowerCase()
+    return tokens.filter(
+      (t) =>
+        t.name.toLowerCase().includes(query) ||
+        t.symbol.toLowerCase().includes(query) ||
+        t.creator.toLowerCase().includes(query),
+    )
+  }, [tokens, debouncedSearch])
 
-    const result = query
-      ? tokens.filter(
-          (t) =>
-            t.name.toLowerCase().includes(query) ||
-            t.symbol.toLowerCase().includes(query)
-        )
-      : [...tokens]
-
-    result.sort((a, b) => {
-      if (sort === 'name-az') return a.name.localeCompare(b.name)
-      if (sort === 'oldest') return (a.createdAt ?? 0) - (b.createdAt ?? 0)
-      return (b.createdAt ?? 0) - (a.createdAt ?? 0) // newest
-    })
-
-    return result
-  }, [tokens, debouncedSearch, sort])
+  const factoryContractId = STELLAR_CONFIG.factoryContractId
 
   return (
-    <div className="space-y-4">
-      <div className="flex gap-3 items-end">
-        <div className="flex-1">
-          <Input
-            label="Search tokens"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name or symbol..."
-          />
-        </div>
-        <div className="space-y-1">
-          <label htmlFor="sort" className="block text-sm font-medium text-gray-700">
-            Sort
-          </label>
-          <select
-            id="sort"
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortOption)}
-            className="block px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-          >
-            {(Object.keys(SORT_LABELS) as SortOption[]).map((key) => (
-              <option key={key} value={key}>
-                {SORT_LABELS[key]}
-              </option>
-            ))}
-          </select>
-        </div>
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <Input
+          label="Search tokens"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by address, name or symbol..."
+        />
+
+        {isLoading && (
+          <p className="text-sm text-gray-500">Loading tokens...</p>
+        )}
+
+        {error && (
+          <p className="text-sm text-red-500">{error.message}</p>
+        )}
+
+        {!isLoading && !error && (
+          <>
+            <ul className="space-y-2">
+              {filteredTokens.length === 0 ? (
+                <li className="text-sm text-gray-500">No tokens found.</li>
+              ) : (
+                filteredTokens.map((token, i) => (
+                  <li
+                    key={token.creator + i}
+                    className="p-3 border rounded text-sm flex items-center justify-between gap-2"
+                  >
+                    <div>
+                      <span className="font-medium">{token.name}</span>
+                      <span className="ml-2 text-gray-500">({token.symbol})</span>
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        Created: {formatCreationDate(token.createdAt)}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleCopyAddress(token.creator)}
+                      className="text-xs text-blue-500 hover:underline shrink-0"
+                      aria-label={`Copy address for ${token.name}`}
+                    >
+                      {copiedAddress === token.creator ? 'Copied!' : 'Copy address'}
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+
+            {/* Only show pagination when not filtering by search */}
+            {!debouncedSearch.trim() && null}
+          </>
+        )}
       </div>
 
-      {loading ? (
-        <p className="text-sm text-gray-500">Loading tokens...</p>
-      ) : filtered.length === 0 ? (
-        <p className="text-sm text-gray-500">
-          {debouncedSearch
-            ? 'No tokens match your search.'
-            : 'No tokens have been deployed yet.'}
-        </p>
-      ) : (
-        <ul className="space-y-2">
-          {filtered.map((token) => (
-            <li key={`${token.symbol}-${token.creator}`} className="p-3 border rounded-md text-sm space-y-1">
-              <div className="font-medium">
-                {token.name}{' '}
-                <span className="text-gray-500">({token.symbol})</span>
-              </div>
-              <div className="text-gray-600 text-xs">
-                Supply: {token.totalSupply} · Decimals: {token.decimals}
-              </div>
-            </li>
-          ))}
-        </ul>
+      {factoryContractId && (
+        <div className="space-y-2">
+          <h2 className="text-base font-semibold text-gray-800">Recent Activity</h2>
+          <TransactionHistory contractId={factoryContractId} />
+        </div>
       )}
     </div>
   )
 }
+
+export const Dashboard = TokenDashboard
